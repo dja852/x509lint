@@ -934,7 +934,7 @@ static void CheckSAN(X509 *x509, CertType type)
 		name_type_allowed[i] = false;
 	}
 
-	if (GetBit(cert_info, CERT_INFO_SERV_AUTH) || GetBit(cert_info, CERT_INFO_ANY_EKU) || GetBit(cert_info, CERT_INFO_NO_EKU))
+	if (GetBit(cert_info, CERT_INFO_SERV_AUTH) || GetBit(cert_info, CERT_INFO_CLIENT_AUTH) || GetBit(cert_info, CERT_INFO_ANY_EKU) || GetBit(cert_info, CERT_INFO_NO_EKU))
 	{
 		name_type_allowed[GEN_DNS] = true;
 		name_type_allowed[GEN_IPADD] = true;
