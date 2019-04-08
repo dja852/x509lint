@@ -57,7 +57,6 @@ static void RSA_get0_key(const RSA *r, const BIGNUM **n, const BIGNUM **e, const
 
 static iconv_t iconv_utf8;
 static iconv_t iconv_ucs2;
-static iconv_t iconv_t61;
 static iconv_t iconv_utf32;
 
 static const char *OIDStreetAddress = "2.5.4.9";
@@ -375,21 +374,42 @@ static bool CheckStringValid(ASN1_STRING *data, size_t *char_len)
 	}
 	else if (data->type == V_ASN1_T61STRING)  /* TeletexString, T61String */
 	{
-		size_t n = data->length;
-		size_t utf8_size = data->length*2;
-		char *s = (char *)data->data;
-		utf8 = malloc(utf8_size);
-		char *pu = utf8;
-
-		/* reset iconv */
-		iconv(iconv_t61, NULL, 0, NULL, 0);
-
-		if (iconv(iconv_t61, &s, &n, &pu, &utf8_size) == (size_t) -1 || n != 0)
+		/* Don't try to decode it, nothing properly implements it. Just accept the 102 character set. */
+		for (int i = 0; i < data->length; i++)
 		{
-			ret = false;
-			SetError(ERR_INVALID_ENCODING);
+			if (data->data[i] == '\0')
+			{
+				ret = false;
+				SetError(ERR_STRING_WITH_NUL);
+			}
+			if (data->data[i] == 0x1B)
+			{
+				/*
+				 * It's valid, but there are no implemenations that really handle
+				 * things, just return an error.
+				 */
+				ret = false;
+				SetError(ERR_TELETEX_WITH_ESCAPE);
+			}
+			else if (data->data[i] < 32)
+			{
+				ret = false;
+				SetError(ERR_NON_PRINTABLE);
+			}
+			else if (data->data[i] >= 127)
+			{
+				/* Things could be mapped here, but it first requires an escape sequence */
+				ret = false;
+				SetError(ERR_INVALID_ENCODING);
+			}
+			else if (data->data[i] == 0x5C || data->data[i] == 0x5E || data->data[i] == 0x60 ||
+				data->data[i] == 0x7B || data->data[i] == 0x7D || data->data[i] == 0x7E)
+			{
+				/* Not mapped in the 102 character set */
+				ret = false;
+				SetError(ERR_INVALID_ENCODING);
+			}
 		}
-		utf8_len = pu - utf8;
 	}
 	else
 	{
@@ -861,11 +881,21 @@ static void CheckPolicy(X509 *x509, CertType type, X509_NAME *subject)
 	}
 	while (1);
 
-	if ((IsNameObjPresent(subject, obj_givenName) || IsNameObjPresent(subject, obj_surname))
-		&& !CabIVPresent)
+	if (GetBit(cert_info, CERT_INFO_SERV_AUTH) || GetBit(cert_info, CERT_INFO_ANY_EKU) || GetBit(cert_info, CERT_INFO_NO_EKU))
 	{
-		/* Required by CAB 7.1.4.2.2c */
-		SetError(ERR_NAME_NO_IV_POLICY);
+		if ((IsNameObjPresent(subject, obj_givenName) || IsNameObjPresent(subject, obj_surname))
+			&& !CabIVPresent)
+		{
+			/* Required by CAB 7.1.4.2.2c */
+			SetError(ERR_NAME_NO_IV_POLICY);
+		}
+	}
+	else
+	{
+		if (DomainValidated || IndividualValidated || CabIVPresent)
+		{
+			SetError(ERR_POLICY_BR);
+		}
 	}
 
 
@@ -927,23 +957,47 @@ static void CheckSAN(X509 *x509, CertType type)
 	bool bSanRequired = false;
 	bool bCommonNameFound = false;
 	ASN1_STRING *commonName = NULL;
-	bool name_type_allowed[GEN_RID+1];
+	enum { SAN_TYPE_NOT_ALLOWED, SAN_TYPE_ALLOWED, SAN_TYPE_WARN } name_type_allowed[GEN_RID+1];
 
 	for (int i = 0; i < GEN_RID+1; i++)
 	{
-		name_type_allowed[i] = false;
+		name_type_allowed[i] = SAN_TYPE_NOT_ALLOWED;
 	}
 
 	if (GetBit(cert_info, CERT_INFO_SERV_AUTH) || GetBit(cert_info, CERT_INFO_ANY_EKU) || GetBit(cert_info, CERT_INFO_NO_EKU))
 	{
-		name_type_allowed[GEN_DNS] = true;
-		name_type_allowed[GEN_IPADD] = true;
+		name_type_allowed[GEN_DNS] = SAN_TYPE_ALLOWED;
+		name_type_allowed[GEN_IPADD] = SAN_TYPE_ALLOWED;
 		bSanRequired = true;
 	}
 	if (GetBit(cert_info, CERT_INFO_EMAIL) || GetBit(cert_info, CERT_INFO_ANY_EKU) || GetBit(cert_info, CERT_INFO_NO_EKU))
 	{
-		name_type_allowed[GEN_EMAIL] = true;
+		name_type_allowed[GEN_EMAIL] = SAN_TYPE_ALLOWED;
 		bSanRequired = true;
+	}
+	if (GetBit(cert_info, CERT_INFO_CLIENT_AUTH))
+	{
+		/*
+		 * DNS and IP address doesn't make sense for a TLS client that
+		 * doesn't also do server authentication.
+		 */
+		if (name_type_allowed[GEN_DNS] == SAN_TYPE_NOT_ALLOWED)
+		{
+			name_type_allowed[GEN_DNS] = SAN_TYPE_WARN;
+			name_type_allowed[GEN_IPADD] = SAN_TYPE_WARN;
+		}
+		name_type_allowed[GEN_EMAIL] = SAN_TYPE_ALLOWED;
+	}
+	if (GetBit(warnings, WARN_UNKNOWN_EKU) && !GetBit(cert_info, CERT_INFO_SERV_AUTH) && !GetBit(cert_info, CERT_INFO_ANY_EKU))
+	{
+		/*
+		 * If it's a certificate with an unknown EKU that isn't
+		 * also valid for server auth, allow the other types
+		 */
+		name_type_allowed[GEN_OTHERNAME] = SAN_TYPE_ALLOWED;
+		name_type_allowed[GEN_X400] = SAN_TYPE_ALLOWED;
+		name_type_allowed[GEN_EDIPARTY] = SAN_TYPE_ALLOWED;
+		name_type_allowed[GEN_URI] = SAN_TYPE_ALLOWED;
 	}
 
 	X509_NAME *subject = X509_get_subject_name(x509);
@@ -986,9 +1040,13 @@ static void CheckSAN(X509 *x509, CertType type)
 			{
 				SetError(ERR_INVALID);
 			}
-			else if (!name_type_allowed[type])
+			else if (name_type_allowed[type] == SAN_TYPE_NOT_ALLOWED)
 			{
 				SetError(ERR_SAN_TYPE);
+			}
+			else if (name_type_allowed[type] == SAN_TYPE_WARN)
+			{
+				SetWarning(WARN_TLS_CLIENT_DNS);
 			}
 			if (type == GEN_DNS)
 			{
@@ -1676,7 +1734,6 @@ void check_init()
 
 	iconv_utf8 = iconv_open("utf-8", "utf-8");
 	iconv_ucs2 = iconv_open("utf-8", "ucs-2be");
-	iconv_t61 = iconv_open("utf-8", "CSISO103T618BIT");
 	iconv_utf32 = iconv_open("utf-32", "utf-8");
 
 	obj_organizationName = OBJ_nid2obj(NID_organizationName);
@@ -1717,7 +1774,6 @@ void check_finish()
 {
 	iconv_close(iconv_utf8);
 	iconv_close(iconv_ucs2);
-	iconv_close(iconv_t61);
 	iconv_close(iconv_utf32);
 	BN_free(bn_factors);
 	ASN1_OBJECT_free(obj_jurisdictionCountryName);

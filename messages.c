@@ -109,8 +109,10 @@ static const char *error_strings[] =
 	"E: CA root certificate with Extended Key Usage\n", /* ERR_ROOT_CA_WITH_EKU */
 	"E: Extended Key Usage without any entries\n", /* ERR_EMPTY_EKU */
 	"E: Extended Key Usage lacks a required purpose\n", /* ERR_MISSING_EKU */
-	"E: Invalid length of domainComponent", /* ERR_DOMAINCOMPONENT_SIZE */
-	"E: Invalid length of unstructuredName", /* ERR_UNSTRUCTUREDNAME_SIZE */
+	"E: Invalid length of domainComponent\n", /* ERR_DOMAINCOMPONENT_SIZE */
+	"E: Invalid length of unstructuredName\n", /* ERR_UNSTRUCTUREDNAME_SIZE */
+	"E: Teletex string with an escape sequence\n", /* ERR_TELETEX_WITH_ESCAPE */
+	"E: Baseline Requirements policy present for non server authentication certificate\n", /* ERR_POLICY_BR */
 };
 
 static const char *warning_strings[] = {
@@ -127,7 +129,8 @@ static const char *warning_strings[] = {
 	"W: Policy information has qualifier other than CPS URI\n", /* WARN_POLICY_QUALIFIER_NOT_CPS */
 	"W: explicitText is not using a UTF8String\n", /* WARN_EXPLICIT_TEXT_ENCODING */
 	"W: Subscriber certificate without Extended Key Usage\n", /* WARN_NO_EKU */
-	"W: No commonName\n" /* WARN_NO_CN */
+	"W: No commonName\n", /* WARN_NO_CN */
+	"W: TLS client with DNS or IP address\n", /* WARN_TLS_CLIENT_DNS */
 };
 
 static const char *info_strings[] = {
